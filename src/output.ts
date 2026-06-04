@@ -42,6 +42,7 @@ interface JsonLintOutput {
 		patterns: string[];
 	};
 	files: JsonLintFileResult[];
+	skippedFiles: string[];
 }
 
 export function countBySeverity(diagnostics: Diagnostic[]) {
@@ -78,6 +79,7 @@ export function toJsonDiagnostic(diagnostic: Diagnostic): JsonDiagnostic {
 export function createJsonOutput({
 	files,
 	totalFilesProcessed,
+	skippedFiles = [],
 	cwd,
 	configPath,
 	autoDiscover,
@@ -86,6 +88,7 @@ export function createJsonOutput({
 }: {
 	files: LintFileResult[];
 	totalFilesProcessed: number;
+	skippedFiles?: string[];
 	cwd: string;
 	configPath?: string;
 	autoDiscover: boolean;
@@ -132,6 +135,7 @@ export function createJsonOutput({
 			patterns,
 		},
 		files: mappedFiles,
+		skippedFiles,
 	};
 }
 
@@ -168,5 +172,6 @@ export function createJsonErrorOutput({
 			patterns,
 		},
 		files: [],
+		skippedFiles: [],
 	};
 }

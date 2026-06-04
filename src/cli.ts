@@ -285,6 +285,16 @@ ${ansis.bold.cyan("Notes:")}
 				process.stdout.write(`\r${" ".repeat(TERMINAL_WIDTH)}\r`);
 			}
 
+			if (results.skippedFiles.length > 0 && !isJsonOutput) {
+				for (const skipped of results.skippedFiles) {
+					console.log(
+						ansis.yellow(
+							`⚠ Skipped ${truncateFilename(skipped)} (exceeds size limit)`,
+						),
+					);
+				}
+			}
+
 			if (results.totalFilesProcessed === 0) {
 				if (isJsonOutput) {
 					console.log(
@@ -293,6 +303,7 @@ ${ansis.bold.cyan("Notes:")}
 								...resolved,
 								files: [],
 								totalFilesProcessed: 0,
+								skippedFiles: results.skippedFiles,
 							}),
 						),
 					);
@@ -311,6 +322,7 @@ ${ansis.bold.cyan("Notes:")}
 								...resolved,
 								files: [],
 								totalFilesProcessed: results.totalFilesProcessed,
+								skippedFiles: results.skippedFiles,
 							}),
 						),
 					);
@@ -327,6 +339,7 @@ ${ansis.bold.cyan("Notes:")}
 							...resolved,
 							files: results.files,
 							totalFilesProcessed: results.totalFilesProcessed,
+							skippedFiles: results.skippedFiles,
 						}),
 					),
 				);

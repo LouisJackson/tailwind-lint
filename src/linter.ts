@@ -9,6 +9,7 @@ import {
 	CONCURRENT_FILES,
 	DEFAULT_FILE_PATTERN,
 	DEFAULT_IGNORE_PATTERNS,
+	MAX_FILE_SIZE_BYTES,
 	SYNTHETIC_VITE_CSS_CONFIG_CONTENT,
 	getLanguageId,
 } from "./constants";
@@ -26,6 +27,7 @@ import {
 } from "./utils/config";
 import {
 	fileExists,
+	getFileSize,
 	readFileSync,
 	readGitignorePatterns,
 	writeFileSync,
@@ -366,25 +368,42 @@ export async function lint({
 				].sort((a, b) => a.localeCompare(b))
 			: discoveredFiles;
 
+	const skippedFiles: string[] = [];
+	const lintableFiles = files.filter((file) => {
+		const absolutePath = path.isAbsolute(file) ? file : path.resolve(cwd, file);
+		if (getFileSize(absolutePath) > MAX_FILE_SIZE_BYTES) {
+			skippedFiles.push(file);
+			return false;
+		}
+		return true;
+	});
+
 	if (verbose) {
 		console.log(
 			ansis.cyan.bold(
-				`→ Discovered ${files.length} file${files.length !== 1 ? "s" : ""} to lint`,
+				`→ Discovered ${lintableFiles.length} file${lintableFiles.length !== 1 ? "s" : ""} to lint`,
 			),
 		);
 		console.log();
 	}
 
-	if (files.length === 0) {
-		return { files: [], totalFilesProcessed: 0 };
+	if (lintableFiles.length === 0) {
+		return { files: [], totalFilesProcessed: 0, skippedFiles };
 	}
 
-	const results = await processFiles(state, cwd, files, fix, onProgress);
+	const results = await processFiles(
+		state,
+		cwd,
+		lintableFiles,
+		fix,
+		onProgress,
+	);
 
 	return {
 		files: results.filter(
 			(result) => result.diagnostics.length > 0 || result.fixed,
 		),
-		totalFilesProcessed: files.length,
+		totalFilesProcessed: lintableFiles.length,
+		skippedFiles,
 	};
 }

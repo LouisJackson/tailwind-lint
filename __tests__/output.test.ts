@@ -119,6 +119,7 @@ describe("createJsonErrorOutput", () => {
 				patterns: [],
 			},
 			files: [],
+			skippedFiles: [],
 		});
 	});
 });

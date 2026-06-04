@@ -10,6 +10,14 @@ export function fileExists(filePath: string) {
 	}
 }
 
+export function getFileSize(filePath: string) {
+	try {
+		return fs.statSync(filePath).size;
+	} catch {
+		return 0;
+	}
+}
+
 export function readFileSync(filePath: string) {
 	if (!filePath || typeof filePath !== "string") {
 		throw new TypeError("File path must be a non-empty string");

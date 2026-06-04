@@ -98,6 +98,10 @@ export const DEFAULT_ROOT_FONT_SIZE = 16;
 
 export const CONCURRENT_FILES = 10;
 
+// Files larger than this are skipped. The Tailwind language service can hang
+// on very large (often minified/generated) files, so guard against it.
+export const MAX_FILE_SIZE_BYTES = 512 * 1024;
+
 export const SEVERITY = {
 	ERROR: 1,
 	WARNING: 2,

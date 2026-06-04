@@ -51,6 +51,7 @@ export interface LintOptions {
 export interface LintResult {
 	files: LintFileResult[];
 	totalFilesProcessed: number;
+	skippedFiles: string[];
 }
 
 /**
