@@ -18,6 +18,7 @@ import {
 	createJsonOutput,
 } from "./output";
 import type { LintFileResult } from "./types";
+import { findProjectRoot, isCssConfigFile } from "./utils/config";
 
 const MAX_FILENAME_DISPLAY_LENGTH = 50;
 
@@ -46,7 +47,8 @@ function resolveOptions(files: string[], options: CliOptions) {
 	}
 
 	if (hasConfigFlag && options.config && !hasFiles) {
-		cwd = path.dirname(configPath);
+		const configDir = path.dirname(configPath);
+		cwd = isCssConfigFile(configPath) ? findProjectRoot(configDir) : configDir;
 		patterns = [];
 		autoDiscover = true;
 	}

@@ -12,7 +12,7 @@ import {
 	extractSourcePatterns,
 	lint,
 } from "../src/linter";
-import { findTailwindConfigPath } from "../src/utils/config";
+import { findProjectRoot, findTailwindConfigPath } from "../src/utils/config";
 import { readGitignorePatterns } from "../src/utils/fs";
 
 describe("extractSourcePatterns", () => {
@@ -315,6 +315,30 @@ describe("findTailwindConfigPath", () => {
 		expect(discovered).toBe(path.join(nestedDir, "theme.css"));
 	});
 
+	it("should prefer a v4 css config in a common location over a legacy v3 config", async () => {
+		const cssDir = path.join(tmpDir, "src", "app");
+		fs.mkdirSync(cssDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(tmpDir, "tailwind.config.js"),
+			"module.exports = { content: ['./src/**/*.tsx'] }",
+		);
+		fs.writeFileSync(
+			path.join(cssDir, "globals.css"),
+			'@import "tailwindcss";',
+		);
+
+		const discovered = await findTailwindConfigPath(tmpDir);
+		expect(discovered).toBe(path.join(cssDir, "globals.css"));
+	});
+
+	it("should find the nearest project root from a nested css config directory", () => {
+		const cssDir = path.join(tmpDir, "src", "app");
+		fs.mkdirSync(cssDir, { recursive: true });
+		fs.writeFileSync(path.join(tmpDir, "package.json"), "{}");
+
+		expect(findProjectRoot(cssDir)).toBe(tmpDir);
+	});
+
 	it("should discover v4 projects configured through the Tailwind Vite plugin", async () => {
 		const nestedDir = path.join(tmpDir, "packages", "docs");
 		fs.mkdirSync(nestedDir, { recursive: true });
@@ -483,5 +507,50 @@ describe("config-driven CLI behavior", () => {
 		expect(result.totalFilesProcessed).toBe(2);
 		expect(result.files).toHaveLength(1);
 		expect(result.files[0].path).toBe("example.html");
+	});
+
+	it("should keep automatic project sources when css @source directives are present", async () => {
+		fs.mkdirSync(path.join(tmpDir, "src", "app"), { recursive: true });
+		fs.mkdirSync(path.join(tmpDir, "shared"), { recursive: true });
+		fs.writeFileSync(
+			path.join(tmpDir, "package.json"),
+			fs.readFileSync(
+				path.resolve(__dirname, "fixtures", "v4", "package.json"),
+				"utf-8",
+			),
+			"utf-8",
+		);
+		fs.symlinkSync(
+			path.resolve(__dirname, "fixtures", "v4", "node_modules"),
+			path.join(tmpDir, "node_modules"),
+			"dir",
+		);
+		const cssConfigPath = path.join(tmpDir, "src", "app", "globals.css");
+		fs.writeFileSync(
+			cssConfigPath,
+			`@import "tailwindcss";
+@source "../../shared";
+`,
+		);
+		fs.writeFileSync(
+			path.join(tmpDir, "src", "app", "page.html"),
+			'<div class="p-[16px]"></div>\n',
+		);
+		fs.writeFileSync(
+			path.join(tmpDir, "shared", "component.html"),
+			'<div class="p-4"></div>\n',
+		);
+
+		const result = await lint({
+			cwd: tmpDir,
+			patterns: [],
+			configPath: cssConfigPath,
+			autoDiscover: true,
+		});
+
+		expect(result.files.map((file) => file.path)).toContain(
+			"src/app/page.html",
+		);
+		expect(result.totalFilesProcessed).toBe(3);
 	});
 });

@@ -66,9 +66,9 @@
 		"vscode-languageserver-textdocument": "^1.0.12"
 	},
 	"devDependencies": {
-		"@types/node": "^25.9.1",
-		"oxfmt": "^0.53.0",
-		"oxlint": "^1.68.0",
+		"@types/node": "^25.9.3",
+		"oxfmt": "^0.54.0",
+		"oxlint": "^1.69.0",
 		"tsdown": "^0.22.2",
 		"typescript": "^6.0.3",
 		"vitest": "^4.1.8"
@@ -77,5 +77,5 @@
 		"node": ">=22.0.0",
 		"pnpm": ">=10.0.0"
 	},
-	"packageManager": "pnpm@11.5.1"
+	"packageManager": "pnpm@11.5.3"
 }

@@ -16,8 +16,29 @@ import { fileExists, readFileSync } from "./fs";
 
 const require = createRequire(import.meta.url || __filename);
 const CONFIG_DISCOVERY_MAX_DEPTH = 8;
+const PROJECT_ROOT_MARKERS = ["package.json", ".git"];
 
 export const isCssConfigFile = (filePath: string) => filePath.endsWith(".css");
+
+export function findProjectRoot(startDir: string) {
+	let current = path.resolve(startDir);
+
+	while (true) {
+		if (
+			PROJECT_ROOT_MARKERS.some((marker) =>
+				fileExists(path.join(current, marker)),
+			)
+		) {
+			return current;
+		}
+
+		const parent = path.dirname(current);
+		if (parent === current) {
+			return path.resolve(startDir);
+		}
+		current = parent;
+	}
+}
 
 function syntheticViteCssConfigPath(viteConfigPath: string) {
 	return path.join(
@@ -91,28 +112,6 @@ export async function findTailwindConfigPath(
 		return fileExists(resolved) ? resolved : null;
 	}
 
-	// Search for v3 JavaScript config files
-	for (const p of V3_CONFIG_PATHS) {
-		const fullPath = path.join(cwd, p);
-		if (fileExists(fullPath)) {
-			return fullPath;
-		}
-	}
-
-	// Fallback: search for v3 config files recursively
-	const v3Recursive = await glob(
-		V3_CONFIG_PATHS.map((p) => `**/${p}`),
-		{
-			cwd,
-			absolute: true,
-			ignore: DEFAULT_IGNORE_PATTERNS,
-			deep: CONFIG_DISCOVERY_MAX_DEPTH,
-		},
-	);
-	if (v3Recursive.length > 0) {
-		return sortByPathDepth(v3Recursive)[0];
-	}
-
 	// Search for v4 CSS config files
 	const v4Paths = V4_CSS_FOLDERS.flatMap((folder) =>
 		V4_CSS_NAMES.map((name) => path.join(folder, name)),
@@ -131,6 +130,14 @@ export async function findTailwindConfigPath(
 				// File exists but can't be read (permission denied, etc.) - skip it
 				// This is expected behavior when scanning directories
 			}
+		}
+	}
+
+	// Search for v3 JavaScript config files
+	for (const p of V3_CONFIG_PATHS) {
+		const fullPath = path.join(cwd, p);
+		if (fileExists(fullPath)) {
+			return fullPath;
 		}
 	}
 
@@ -156,6 +163,20 @@ export async function findTailwindConfigPath(
 
 	if (v4Matches.length > 0) {
 		return sortCssCandidates(cwd, v4Matches)[0];
+	}
+
+	// Fallback: search for v3 config files recursively
+	const v3Recursive = await glob(
+		V3_CONFIG_PATHS.map((p) => `**/${p}`),
+		{
+			cwd,
+			absolute: true,
+			ignore: DEFAULT_IGNORE_PATTERNS,
+			deep: CONFIG_DISCOVERY_MAX_DEPTH,
+		},
+	);
+	if (v3Recursive.length > 0) {
+		return sortByPathDepth(v3Recursive)[0];
 	}
 
 	const viteConfigPath = await findTailwindViteConfigPath(cwd);

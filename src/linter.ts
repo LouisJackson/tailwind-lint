@@ -21,6 +21,7 @@ import type {
 	TailwindConfig,
 } from "./types";
 import {
+	findProjectRoot,
 	findTailwindConfigPath,
 	isCssConfigFile,
 	loadTailwindConfig,
@@ -32,6 +33,9 @@ import {
 	readGitignorePatterns,
 	writeFileSync,
 } from "./utils/fs";
+
+const SOURCE_FILE_PATTERN = "**/*.{js,jsx,ts,tsx,html,vue,svelte,astro,mdx}";
+const GLOB_PATTERN_REGEX = /[*?[\]{}]/;
 
 async function validateDocument(
 	state: State,
@@ -112,6 +116,10 @@ async function discoverFilesFromConfig(cwd: string, configPath?: string) {
 		);
 	}
 
+	const discoveryCwd = isCssConfigFile(configFilePath)
+		? findProjectRoot(path.dirname(configFilePath))
+		: cwd;
+
 	if (!isCssConfigFile(configFilePath)) {
 		const config = await loadTailwindConfig(configFilePath);
 
@@ -132,7 +140,7 @@ async function discoverFilesFromConfig(cwd: string, configPath?: string) {
 			);
 		}
 
-		return expandPatterns(cwd, patterns);
+		return expandPatterns(discoveryCwd, patterns);
 	}
 
 	const configDir = path.dirname(configFilePath);
@@ -144,48 +152,71 @@ async function discoverFilesFromConfig(cwd: string, configPath?: string) {
 			return files;
 		}
 
-		const relativeConfigPath = path.relative(cwd, configFilePath);
+		const relativeConfigPath = path.relative(discoveryCwd, configFilePath);
 		return [...new Set([relativeConfigPath, ...files])].sort((a, b) =>
 			a.localeCompare(b),
 		);
 	};
+	const resolveDiscoveredFiles = (files: string[]) =>
+		discoveryCwd === cwd
+			? files
+			: files
+					.map((file) => path.resolve(discoveryCwd, file))
+					.sort((a, b) => a.localeCompare(b));
 	const { include, exclude } = extractSourcePatterns(cssContent);
 	const importSource = extractImportSourceDirectives(cssContent);
 
 	const resolveFromConfig = (pattern: string) => {
 		const absolutePattern = path.resolve(configDir, pattern);
-		return path.relative(cwd, absolutePattern);
+		return path.relative(discoveryCwd, absolutePattern);
 	};
 
 	const resolvedExclude = exclude.map(resolveFromConfig);
-	const gitignorePatterns = readGitignorePatterns(cwd);
+	const gitignorePatterns = readGitignorePatterns(discoveryCwd);
 	const extraIgnore = [...resolvedExclude, ...gitignorePatterns];
 
-	if (include.length > 0) {
-		const resolvedPatterns = include.map(resolveFromConfig);
-		return includeConfigFile(
-			await expandPatterns(cwd, resolvedPatterns, extraIgnore),
-		);
-	}
-
-	if (importSource.roots.length > 0) {
-		const sourcePatterns = importSource.roots.map((root) =>
-			resolveFromConfig(
-				path.join(root, "**/*.{js,jsx,ts,tsx,html,vue,svelte,astro,mdx}"),
-			),
-		);
-		return includeConfigFile(
-			await expandPatterns(cwd, sourcePatterns, extraIgnore),
-		);
-	}
-
-	if (importSource.disableAutoSource) {
-		return includeConfigFile([]);
-	}
-
-	return includeConfigFile(
-		await expandPatterns(cwd, [DEFAULT_FILE_PATTERN], extraIgnore),
+	const explicitSourcePatterns = include.map((source) =>
+		resolveFromConfig(normalizeSourcePattern(source)),
 	);
+
+	let autoPatterns: string[] = [];
+	if (!importSource.disableAutoSource) {
+		autoPatterns =
+			importSource.roots.length > 0
+				? importSource.roots.map((root) =>
+						resolveFromConfig(normalizeSourcePattern(root)),
+					)
+				: [DEFAULT_FILE_PATTERN];
+	}
+
+	const autoFiles =
+		autoPatterns.length > 0
+			? await expandPatterns(discoveryCwd, autoPatterns, extraIgnore)
+			: [];
+	const explicitFiles =
+		explicitSourcePatterns.length > 0
+			? await expandPatterns(
+					discoveryCwd,
+					explicitSourcePatterns,
+					resolvedExclude,
+				)
+			: [];
+
+	return resolveDiscoveredFiles(
+		includeConfigFile(
+			[...new Set([...autoFiles, ...explicitFiles])].sort((a, b) =>
+				a.localeCompare(b),
+			),
+		),
+	);
+}
+
+function normalizeSourcePattern(pattern: string) {
+	if (GLOB_PATTERN_REGEX.test(pattern) || path.extname(pattern)) {
+		return pattern;
+	}
+
+	return path.join(pattern, SOURCE_FILE_PATTERN);
 }
 
 function extractContentPatterns(config: TailwindConfig) {
@@ -356,17 +387,14 @@ export async function lint({
 		configPath,
 		autoDiscover,
 	);
-	const files =
+	const files = uniqueFilesByResolvedPath(
+		cwd,
 		state.configPath &&
-		isCssConfigFile(state.configPath) &&
-		fileExists(state.configPath)
-			? [
-					...new Set([
-						path.relative(cwd, state.configPath),
-						...discoveredFiles,
-					]),
-				].sort((a, b) => a.localeCompare(b))
-			: discoveredFiles;
+			isCssConfigFile(state.configPath) &&
+			fileExists(state.configPath)
+			? [path.relative(cwd, state.configPath), ...discoveredFiles]
+			: discoveredFiles,
+	);
 
 	const skippedFiles: string[] = [];
 	const lintableFiles = files.filter((file) => {
@@ -406,4 +434,20 @@ export async function lint({
 		totalFilesProcessed: lintableFiles.length,
 		skippedFiles,
 	};
+}
+
+function uniqueFilesByResolvedPath(cwd: string, files: string[]) {
+	const seen = new Set<string>();
+	const unique: string[] = [];
+
+	for (const file of files) {
+		const absolutePath = path.isAbsolute(file) ? file : path.resolve(cwd, file);
+		if (seen.has(absolutePath)) {
+			continue;
+		}
+		seen.add(absolutePath);
+		unique.push(file);
+	}
+
+	return unique.sort((a, b) => a.localeCompare(b));
 }
