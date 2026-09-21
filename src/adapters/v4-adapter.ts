@@ -118,22 +118,21 @@ export async function loadV4DesignSystem(
 			Object.assign(designSystem, {
 				dependencies: () => new Set<string>(),
 
-				compile(classes: string[]): unknown[] {
-					if (designSystem.candidatesToCss) {
-						const results = designSystem.candidatesToCss(classes);
-						return results.map((result: unknown) => {
-							if (typeof result === "string" && result.length > 0) {
-								try {
-									return postcss.parse(result);
-								} catch {
-									return postcss.root();
-								}
-							}
-							return postcss.root();
-						});
+				// language-service 0.16+ walks a Tailwind AST (`node.kind`), not PostCSS roots.
+				compile(classes: string[]): unknown[][] {
+					if (designSystem.candidatesToAst) {
+						return designSystem.candidatesToAst(classes);
 					}
 
-					return classes.map(() => postcss.root());
+					if (designSystem.candidatesToCss) {
+						return designSystem
+							.candidatesToCss(classes)
+							.map((css) =>
+								typeof css === "string" && css.length > 0 ? cssToAst(css) : [],
+							);
+					}
+
+					return classes.map(() => []);
 				},
 			});
 
@@ -164,4 +163,61 @@ export async function loadV4DesignSystem(
 		}
 		throw new Error(`Failed to load v4 design system: ${String(error)}`);
 	}
+}
+
+type AstNode = {
+	kind: "rule" | "at-rule" | "declaration";
+	selector?: string;
+	name?: string;
+	params?: string;
+	property?: string;
+	value?: string;
+	nodes?: AstNode[] | null;
+};
+
+function cssToAst(css: string): AstNode[] {
+	try {
+		return postcssNodesToAst(postcss.parse(css).nodes);
+	} catch {
+		return [];
+	}
+}
+
+function postcssNodesToAst(nodes: postcss.ChildNode[] | undefined): AstNode[] {
+	if (!nodes) {
+		return [];
+	}
+
+	const ast: AstNode[] = [];
+
+	for (const node of nodes) {
+		if (node.type === "rule") {
+			ast.push({
+				kind: "rule",
+				selector: node.selector,
+				nodes: postcssNodesToAst(node.nodes),
+			});
+			continue;
+		}
+
+		if (node.type === "atrule") {
+			ast.push({
+				kind: "at-rule",
+				name: `@${node.name}`,
+				params: node.params,
+				nodes: node.nodes ? postcssNodesToAst(node.nodes) : null,
+			});
+			continue;
+		}
+
+		if (node.type === "decl") {
+			ast.push({
+				kind: "declaration",
+				property: node.prop,
+				value: node.value,
+			});
+		}
+	}
+
+	return ast;
 }

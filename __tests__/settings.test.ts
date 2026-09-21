@@ -145,6 +145,7 @@ describe("workspace tailwind settings", () => {
 					invalidApply: "error",
 					invalidScreen: "error",
 					invalidVariant: "error",
+					deprecatedAtRule: "warning",
 					invalidConfigPath: "error",
 					invalidTailwindDirective: "error",
 					invalidSourceDirective: "error",
