@@ -16,15 +16,6 @@ export interface DesignSystem {
 	[key: string]: unknown;
 }
 
-export interface ContextUtils {
-	[key: string]: unknown;
-}
-
-export interface GenerateRulesModule {
-	generateRules?: (set: unknown, context: unknown) => unknown[];
-	[key: string]: unknown;
-}
-
 export interface ApplyCodeActionsResult {
 	content: string;
 	changed: boolean;

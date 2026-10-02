@@ -103,3 +103,27 @@ describe("CSS Conflict Detection - v4", () => {
 		});
 	});
 });
+
+describe("CSS Conflict Detection - v3", () => {
+	const testV3Dir = path.resolve(__dirname, "fixtures/v3");
+
+	it("should auto-discover the v3 config and detect conflicts", async () => {
+		const result = await lint({
+			cwd: testV3Dir,
+			patterns: [],
+			autoDiscover: true,
+		});
+
+		const conflicts = result.files
+			.find((file) => file.path === "src/css-conflicts.html")
+			?.diagnostics.filter((d) => d.code === "cssConflict")
+			.map((d) => d.message);
+
+		expect(conflicts).toContain(
+			"'block' applies the same CSS properties as 'flex'.",
+		);
+		expect(conflicts).toContain(
+			"'static' applies the same CSS properties as 'fixed'.",
+		);
+	});
+});

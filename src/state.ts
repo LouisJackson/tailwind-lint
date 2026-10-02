@@ -41,6 +41,19 @@ function resolveTailwindPath(paths: string[]) {
 	}
 }
 
+function loadResolveConfig(paths: string[]) {
+	try {
+		const module = require(
+			require.resolve("tailwindcss/resolveConfig", { paths }),
+		) as
+			| ((config: unknown) => unknown)
+			| { default: (config: unknown) => unknown };
+		return typeof module === "function" ? module : module.default;
+	} catch {
+		return undefined;
+	}
+}
+
 const CONFIG_TYPE_LABELS = {
 	css: "CSS (v4)",
 	vite: "Vite (v4)",
@@ -55,11 +68,7 @@ export async function createState(
 	const isCssConfig = target.kind !== "js";
 	// Config's package first: monorepo packages may pin different Tailwind versions
 	const resolvePaths = [path.dirname(target.path), cwd];
-	const tailwindPath = resolveTailwindPath(resolvePaths);
-
-	const tailwindcss = require(tailwindPath) as {
-		resolveConfig?: (config: unknown) => unknown;
-	};
+	resolveTailwindPath(resolvePaths);
 
 	const version = getTailwindVersion(resolvePaths);
 	const isV4 = isV4Config(version);
@@ -80,10 +89,9 @@ export async function createState(
 			...config,
 			separator: config.separator ?? DEFAULT_SEPARATOR,
 		};
-		if (tailwindcss.resolveConfig) {
-			resolvedConfig = tailwindcss.resolveConfig(
-				config,
-			) as ResolvedTailwindConfig;
+		const resolveConfig = loadResolveConfig(resolvePaths);
+		if (resolveConfig) {
+			resolvedConfig = resolveConfig(config) as ResolvedTailwindConfig;
 		}
 	}
 

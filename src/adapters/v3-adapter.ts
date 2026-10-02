@@ -2,10 +2,20 @@ import { createRequire } from "node:module";
 import * as path from "node:path";
 import type { State } from "@tailwindcss/language-service";
 import ansis from "ansis";
-import type { ContextUtils, GenerateRulesModule } from "../types";
 import { AdapterLoadError } from "../types";
 
 const require = createRequire(import.meta.url || __filename);
+
+interface JitContext {
+	getClassList?: (options?: { includeMetadata?: boolean }) => unknown[];
+	getVariants?: () => State["variants"];
+}
+
+function interopDefault<T>(module: T | { default: T }): T {
+	return module && typeof module === "object" && "default" in module
+		? module.default
+		: (module as T);
+}
 
 export async function loadV3ClassMetadata(
 	state: State,
@@ -13,95 +23,51 @@ export async function loadV3ClassMetadata(
 	verbose = false,
 ): Promise<void> {
 	try {
-		const tailwindPath = require.resolve("tailwindcss", {
-			paths: resolvePaths,
-		});
-		const tailwindcss = require(tailwindPath) as unknown;
+		const tailwindDir = path.dirname(
+			require.resolve("tailwindcss/package.json", { paths: resolvePaths }),
+		);
+		const load = (id: string) =>
+			require(require.resolve(id, { paths: [tailwindDir] }));
+		const loadLib = (name: string) =>
+			require(path.join(tailwindDir, "lib", "lib", name));
 
-		try {
-			const tailwindDir = path.dirname(
-				require.resolve("tailwindcss/package.json", { paths: resolvePaths }),
-			);
+		const { createContext } = loadLib("setupContextUtils");
+		const { generateRules } = loadLib("generateRules");
 
-			const contextUtils = require(
-				path.join(tailwindDir, "lib", "lib", "setupContextUtils"),
-			) as ContextUtils;
-			const generateRulesModule = require(
-				path.join(tailwindDir, "lib", "lib", "generateRules"),
-			) as GenerateRulesModule;
-
-			state.modules = {
-				tailwindcss: {
-					version: state.version || "unknown",
-					module: tailwindcss,
+		state.jit = true;
+		state.modules = {
+			tailwindcss: {
+				version: state.version || "unknown",
+				module: load("tailwindcss"),
+			},
+			postcss: {
+				version: load("postcss/package.json").version,
+				module: load("postcss"),
+			},
+			postcssSelectorParser: { module: load("postcss-selector-parser") },
+			jit: {
+				generateRules: { module: generateRules },
+				createContext: { module: createContext },
+				expandApplyAtRules: {
+					module: interopDefault(loadLib("expandApplyAtRules")),
 				},
-				jit: {
-					generateRules: {
-						module:
-							generateRulesModule.generateRules ||
-							((_set: unknown, _context: unknown) => []),
-					},
-					createContext: {
-						module: contextUtils.createContext,
-					},
-					expandApplyAtRules: {
-						module: generateRulesModule.expandApplyAtRules,
-					},
+				evaluateTailwindFunctions: {
+					module: interopDefault(loadLib("evaluateTailwindFunctions")),
 				},
-			};
-
-			if (verbose) {
-				console.log(ansis.dim("  ✓ Loaded v3 JIT modules"));
-			}
-		} catch (jitError) {
-			// JIT modules are optional - some v3 configs may not have them
-			// Fall back to basic module loading without JIT support
-			if (verbose) {
-				const message =
-					jitError instanceof Error ? jitError.message : String(jitError);
-				console.log(
-					ansis.yellow(
-						`  ⚠ Warning: Could not load v3 JIT modules: ${message}`,
-					),
-				);
-			}
-
-			state.modules = {
-				tailwindcss: {
-					version: state.version || "unknown",
-					module: tailwindcss,
-				},
-			};
-		}
+			},
+		};
 
 		extractConfigMetadata(state);
 
-		if (!state.classNames) {
-			state.classNames = {
-				context: {},
-				classNames: {},
-			} as unknown as typeof state.classNames;
-		}
+		const jitContext = createContext(state.config) as JitContext;
+		state.jitContext = jitContext;
+		state.classList = jitContext.getClassList?.({
+			includeMetadata: true,
+		}) as State["classList"];
+		state.variants = jitContext.getVariants?.() ?? [];
 
-		if (state.modules?.jit?.createContext && state.config) {
-			try {
-				state.jitContext = state.modules.jit.createContext.module(state.config);
-				if (verbose) {
-					console.log(ansis.dim("  ✓ Created JIT context"));
-				}
-			} catch (contextError) {
-				if (verbose) {
-					const message =
-						contextError instanceof Error
-							? contextError.message
-							: String(contextError);
-					console.log(
-						ansis.yellow(
-							`  ⚠ Warning: Could not create JIT context: ${message}`,
-						),
-					);
-				}
-			}
+		if (verbose) {
+			console.log(ansis.dim("  ✓ Created v3 JIT context"));
 		}
 	} catch (error) {
 		if (error instanceof Error) {
@@ -122,16 +88,6 @@ function extractConfigMetadata(state: State) {
 		(theme?.screens as Record<string, unknown>) ?? {},
 	);
 	state.blocklist = (config.blocklist as string[] | undefined) ?? [];
-
-	if (config.variants && typeof config.variants === "object") {
-		state.variants = Object.keys(config.variants).map((name) => ({
-			name,
-			values: [],
-			isArbitrary: false,
-			hasDash: true,
-			selectors: () => [],
-		}));
-	}
 
 	if (config.corePlugins) {
 		state.corePlugins = Array.isArray(config.corePlugins)

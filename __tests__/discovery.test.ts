@@ -702,6 +702,36 @@ describe("monorepo discovery", () => {
 		);
 	});
 
+	it("should lint v3 and v4 packages side by side", async () => {
+		writeFile(
+			"apps/legacy/package.json",
+			'{ "dependencies": { "tailwindcss": "3" } }',
+		);
+		writeFile(
+			"apps/legacy/tailwind.config.js",
+			'module.exports = { content: ["./src/**/*.html"] };\n',
+		);
+		writeFile("apps/legacy/src/page.html", '<div class="block flex"></div>\n');
+		fs.symlinkSync(
+			path.resolve(__dirname, "fixtures", "v3", "node_modules"),
+			path.join(tmpDir, "apps", "legacy", "node_modules"),
+			"dir",
+		);
+
+		const result = await lint({
+			cwd: tmpDir,
+			patterns: [],
+			autoDiscover: true,
+		});
+
+		expect(messagesFor(result, "apps/legacy/src/page.html")).toContain(
+			"'block' applies the same CSS properties as 'flex'.",
+		);
+		expect(messagesFor(result, "apps/admin/src/page.html")).toContain(
+			"The class `text-[var(--color-brand)]` can be written as `text-brand`",
+		);
+	});
+
 	it("should only treat package.json workspaces as packages", async () => {
 		writeFile("package.json", '{ "workspaces": ["apps/web"] }');
 
