@@ -21,10 +21,12 @@ import type {
 	TailwindConfig,
 } from "./types";
 import {
-	findProjectRoot,
-	findTailwindConfigPath,
-	isCssConfigFile,
+	type TailwindConfigTarget,
+	findTailwindConfigs,
+	isInsideDir,
 	loadTailwindConfig,
+	nestedRootIgnores,
+	toConfigTarget,
 } from "./utils/config";
 import {
 	fileExists,
@@ -36,6 +38,7 @@ import {
 
 const SOURCE_FILE_PATTERN = "**/*.{js,jsx,ts,tsx,html,vue,svelte,astro,mdx}";
 const GLOB_PATTERN_REGEX = /[*?[\]{}]/;
+const MAX_LISTED_PACKAGES = 10;
 
 async function validateDocument(
 	state: State,
@@ -81,47 +84,24 @@ async function validateDocument(
 	}
 }
 
-async function discoverFiles(
-	cwd: string,
-	patterns: string[],
-	configPath: string | undefined,
-	autoDiscover: boolean,
-) {
-	if (autoDiscover) {
-		return discoverFilesFromConfig(cwd, configPath);
-	}
-	return expandPatterns(cwd, patterns);
-}
-
 async function expandPatterns(
 	cwd: string,
 	patterns: string[],
 	extraIgnore: string[] = [],
 ) {
-	const files = await glob(patterns, {
+	return glob(patterns, {
 		cwd,
-		absolute: false,
+		absolute: true,
 		ignore: [...DEFAULT_IGNORE_PATTERNS, ...extraIgnore],
 	});
-	return [...new Set(files)].sort((a, b) => a.localeCompare(b));
 }
 
-async function discoverFilesFromConfig(cwd: string, configPath?: string) {
-	const configFilePath = await findTailwindConfigPath(cwd, configPath);
-
-	if (!configFilePath) {
-		throw new Error(
-			"Could not find Tailwind config for auto-discovery.\n" +
-				"Use --config to specify the path, or provide file patterns directly.",
-		);
-	}
-
-	const discoveryCwd = isCssConfigFile(configFilePath)
-		? findProjectRoot(path.dirname(configFilePath))
-		: cwd;
-
-	if (!isCssConfigFile(configFilePath)) {
-		const config = await loadTailwindConfig(configFilePath);
+async function discoverFilesFromConfig(
+	target: TailwindConfigTarget,
+	configRoots: string[],
+) {
+	if (target.kind === "js") {
+		const config = await loadTailwindConfig(target.path);
 
 		if (!config || !config.content) {
 			throw new Error(
@@ -140,40 +120,33 @@ async function discoverFilesFromConfig(cwd: string, configPath?: string) {
 			);
 		}
 
-		return expandPatterns(discoveryCwd, patterns);
+		const isRelative =
+			!Array.isArray(config.content) && config.content.relative === true;
+		return expandPatterns(
+			isRelative ? path.dirname(target.path) : target.root,
+			patterns,
+		);
 	}
 
-	const configDir = path.dirname(configFilePath);
-	const cssContent = fileExists(configFilePath)
-		? readFileSync(configFilePath)
-		: SYNTHETIC_VITE_CSS_CONFIG_CONTENT;
-	const includeConfigFile = (files: string[]) => {
-		if (!fileExists(configFilePath)) {
-			return files;
-		}
-
-		const relativeConfigPath = path.relative(discoveryCwd, configFilePath);
-		return [...new Set([relativeConfigPath, ...files])].sort((a, b) =>
-			a.localeCompare(b),
-		);
-	};
-	const resolveDiscoveredFiles = (files: string[]) =>
-		discoveryCwd === cwd
-			? files
-			: files
-					.map((file) => path.resolve(discoveryCwd, file))
-					.sort((a, b) => a.localeCompare(b));
+	const { root } = target;
+	const configDir = path.dirname(target.path);
+	const cssContent =
+		target.kind === "vite"
+			? SYNTHETIC_VITE_CSS_CONFIG_CONTENT
+			: readFileSync(target.path);
 	const { include, exclude } = extractSourcePatterns(cssContent);
 	const importSource = extractImportSourceDirectives(cssContent);
 
-	const resolveFromConfig = (pattern: string) => {
-		const absolutePattern = path.resolve(configDir, pattern);
-		return path.relative(discoveryCwd, absolutePattern);
-	};
+	const resolveFromConfig = (pattern: string) =>
+		path.relative(root, path.resolve(configDir, pattern));
 
 	const resolvedExclude = exclude.map(resolveFromConfig);
-	const gitignorePatterns = readGitignorePatterns(discoveryCwd);
-	const extraIgnore = [...resolvedExclude, ...gitignorePatterns];
+	// Packages with their own config are linted by that config instead
+	const extraIgnore = [
+		...resolvedExclude,
+		...readGitignorePatterns(root),
+		...nestedRootIgnores(root, configRoots),
+	];
 
 	const explicitSourcePatterns = include.map((source) =>
 		resolveFromConfig(normalizeSourcePattern(source)),
@@ -183,32 +156,23 @@ async function discoverFilesFromConfig(cwd: string, configPath?: string) {
 	if (!importSource.disableAutoSource) {
 		autoPatterns =
 			importSource.roots.length > 0
-				? importSource.roots.map((root) =>
-						resolveFromConfig(normalizeSourcePattern(root)),
+				? importSource.roots.map((sourceRoot) =>
+						resolveFromConfig(normalizeSourcePattern(sourceRoot)),
 					)
 				: [DEFAULT_FILE_PATTERN];
 	}
 
-	const autoFiles =
+	const [autoFiles, explicitFiles] = await Promise.all([
 		autoPatterns.length > 0
-			? await expandPatterns(discoveryCwd, autoPatterns, extraIgnore)
-			: [];
-	const explicitFiles =
+			? expandPatterns(root, autoPatterns, extraIgnore)
+			: [],
 		explicitSourcePatterns.length > 0
-			? await expandPatterns(
-					discoveryCwd,
-					explicitSourcePatterns,
-					resolvedExclude,
-				)
-			: [];
+			? expandPatterns(root, explicitSourcePatterns, resolvedExclude)
+			: [],
+	]);
 
-	return resolveDiscoveredFiles(
-		includeConfigFile(
-			[...new Set([...autoFiles, ...explicitFiles])].sort((a, b) =>
-				a.localeCompare(b),
-			),
-		),
-	);
+	const configFile = target.kind === "css" ? [target.path] : [];
+	return [...new Set([...configFile, ...autoFiles, ...explicitFiles])];
 }
 
 function normalizeSourcePattern(pattern: string) {
@@ -353,11 +317,11 @@ async function processFile(
 }
 async function initializeState(
 	cwd: string,
-	configPath?: string,
+	target: TailwindConfigTarget,
 	verbose = false,
 ) {
 	try {
-		const state = await createState(cwd, configPath, verbose);
+		const state = await createState(cwd, target, verbose);
 		if (verbose) {
 			console.log();
 		}
@@ -380,74 +344,141 @@ export async function lint({
 	verbose = false,
 	onProgress,
 }: LintOptions): Promise<LintResult> {
-	const state = await initializeState(cwd, configPath, verbose);
-	const discoveredFiles = await discoverFiles(
-		cwd,
-		patterns,
-		configPath,
-		autoDiscover,
+	const targets = await resolveConfigTargets(cwd, configPath);
+	if (verbose) {
+		logTargets(cwd, targets);
+	}
+
+	const configRoots = targets.map((target) => target.root);
+	const patternFiles = autoDiscover ? [] : await expandPatterns(cwd, patterns);
+	const discoveredFilesByTarget = await Promise.all(
+		targets.map((target) =>
+			autoDiscover
+				? discoverFilesFromConfig(target, configRoots)
+				: patternFiles,
+		),
 	);
-	const files = uniqueFilesByResolvedPath(
-		cwd,
-		state.configPath &&
-			isCssConfigFile(state.configPath) &&
-			fileExists(state.configPath)
-			? [path.relative(cwd, state.configPath), ...discoveredFiles]
-			: discoveredFiles,
-	);
+
+	const owners = new Map<string, TailwindConfigTarget>();
+	for (const [index, target] of targets.entries()) {
+		const files =
+			target.kind === "css" && !autoDiscover
+				? [target.path, ...discoveredFilesByTarget[index]]
+				: discoveredFilesByTarget[index];
+
+		for (const file of files) {
+			const current = owners.get(file);
+			if (
+				!current ||
+				ownershipScore(target, file) > ownershipScore(current, file)
+			) {
+				owners.set(file, target);
+			}
+		}
+	}
 
 	const skippedFiles: string[] = [];
-	const lintableFiles = files.filter((file) => {
-		const absolutePath = path.isAbsolute(file) ? file : path.resolve(cwd, file);
+	const filesByTarget = new Map<TailwindConfigTarget, string[]>();
+	for (const [absolutePath, target] of owners) {
+		const file = path.relative(cwd, absolutePath);
 		if (getFileSize(absolutePath) > MAX_FILE_SIZE_BYTES) {
 			skippedFiles.push(file);
-			return false;
+			continue;
 		}
-		return true;
-	});
+		const files = filesByTarget.get(target) ?? [];
+		files.push(file);
+		filesByTarget.set(target, files);
+	}
 
+	const totalFiles = owners.size - skippedFiles.length;
 	if (verbose) {
 		console.log(
 			ansis.cyan.bold(
-				`→ Discovered ${lintableFiles.length} file${lintableFiles.length !== 1 ? "s" : ""} to lint`,
+				`→ Discovered ${totalFiles} file${totalFiles !== 1 ? "s" : ""} to lint`,
 			),
 		);
 		console.log();
 	}
 
-	if (lintableFiles.length === 0) {
-		return { files: [], totalFilesProcessed: 0, skippedFiles };
+	const results: LintFileResult[] = [];
+	let processedCount = 0;
+	for (const target of targets) {
+		const files = filesByTarget.get(target);
+		if (!files) continue;
+
+		const offset = processedCount;
+		processedCount += files.length;
+		const state = await initializeState(cwd, target, verbose);
+		const processed = await processFiles(
+			state,
+			cwd,
+			files.sort((a, b) => a.localeCompare(b)),
+			fix,
+			onProgress &&
+				((current, _total, file) =>
+					onProgress(offset + current, totalFiles, file)),
+		);
+		results.push(...processed);
 	}
 
-	const results = await processFiles(
-		state,
-		cwd,
-		lintableFiles,
-		fix,
-		onProgress,
-	);
-
 	return {
-		files: results.filter(
-			(result) => result.diagnostics.length > 0 || result.fixed,
-		),
-		totalFilesProcessed: lintableFiles.length,
-		skippedFiles,
+		files: results
+			.filter((result) => result.diagnostics.length > 0 || result.fixed)
+			.sort((a, b) => a.path.localeCompare(b.path)),
+		totalFilesProcessed: totalFiles,
+		skippedFiles: skippedFiles.sort((a, b) => a.localeCompare(b)),
 	};
 }
 
-function uniqueFilesByResolvedPath(cwd: string, files: string[]) {
-	const seen = new Set<string>();
-	const unique: string[] = [];
-
-	for (const file of files) {
-		const absolutePath = path.isAbsolute(file) ? file : path.resolve(cwd, file);
-		if (seen.has(absolutePath)) {
-			continue;
+async function resolveConfigTargets(cwd: string, configPath?: string) {
+	if (configPath) {
+		const absolutePath = path.resolve(cwd, configPath);
+		if (!fileExists(absolutePath)) {
+			throw new Error(`Tailwind config file not found: ${absolutePath}`);
 		}
-		seen.add(absolutePath);
-		unique.push(file);
+		return [toConfigTarget(absolutePath)];
 	}
 
-	return unique.sort((a, b) => a.localeCompare(b));
+	const { targets, packageRoots } = await findTailwindConfigs(cwd);
+	if (targets.length === 0) {
+		throw new Error(noConfigMessage(cwd, packageRoots));
+	}
+	return targets;
+}
+
+function noConfigMessage(cwd: string, packageRoots: string[]) {
+	const packages = packageRoots
+		.map((root) => path.relative(cwd, root))
+		.filter(Boolean)
+		.sort((a, b) => a.localeCompare(b));
+	const shown = packages.slice(0, MAX_LISTED_PACKAGES);
+	const more = packages.length - shown.length;
+	const searched =
+		packages.length > 0
+			? ` or its packages:\n${shown.map((p) => `  • ${p}`).join("\n")}${more > 0 ? `\n  …and ${more} more` : ""}`
+			: "";
+
+	return (
+		`Could not find a Tailwind config in ${cwd}${searched}\n` +
+		"Expected one of:\n" +
+		'  • Tailwind v4 (CSS): a CSS file with @import "tailwindcss", e.g. app.css or src/index.css\n' +
+		"  • Tailwind v4 (Vite): vite.config.* with @tailwindcss/vite\n" +
+		"  • Tailwind v3 (JS): tailwind.config.js, tailwind.config.ts\n" +
+		"Use --config to specify the path."
+	);
+}
+
+function logTargets(cwd: string, targets: TailwindConfigTarget[]) {
+	const display = (p: string) => path.relative(cwd, p) || ".";
+	console.log(ansis.cyan.bold("→ Tailwind configs"));
+	for (const target of targets) {
+		console.log(
+			ansis.dim(`  ${display(target.root)} → ${display(target.path)}`),
+		);
+	}
+	console.log();
+}
+
+function ownershipScore(target: TailwindConfigTarget, absolutePath: string) {
+	return isInsideDir(target.root, absolutePath) ? target.root.length : -1;
 }

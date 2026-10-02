@@ -9,16 +9,18 @@ const require = createRequire(import.meta.url || __filename);
 
 export async function loadV3ClassMetadata(
 	state: State,
-	cwd: string,
+	resolvePaths: string[],
 	verbose = false,
 ): Promise<void> {
 	try {
-		const tailwindPath = require.resolve("tailwindcss", { paths: [cwd] });
+		const tailwindPath = require.resolve("tailwindcss", {
+			paths: resolvePaths,
+		});
 		const tailwindcss = require(tailwindPath) as unknown;
 
 		try {
 			const tailwindDir = path.dirname(
-				require.resolve("tailwindcss/package.json", { paths: [cwd] }),
+				require.resolve("tailwindcss/package.json", { paths: resolvePaths }),
 			);
 
 			const contextUtils = require(

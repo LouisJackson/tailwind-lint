@@ -15,7 +15,7 @@ function isDirectory(filePath: string) {
 	}
 }
 
-export function createEditorState(cwd: string) {
+export function createEditorState(cwd: string): EditorState {
 	const defaultSettings: Settings = {
 		editor: {
 			tabSize: DEFAULT_TAB_SIZE,
@@ -63,6 +63,7 @@ export function createEditorState(cwd: string) {
 				invalidApply: "error",
 				invalidScreen: "error",
 				invalidVariant: "error",
+				deprecatedAtRule: "warning",
 				invalidConfigPath: "error",
 				invalidTailwindDirective: "error",
 				invalidSourceDirective: "error",
@@ -84,6 +85,7 @@ export function createEditorState(cwd: string) {
 		capabilities: {
 			configuration: true,
 			diagnosticRelatedInformation: true,
+			diagnosticTagSupport: false,
 			itemDefaults: [],
 		},
 		getConfiguration: async () => settings,

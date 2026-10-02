@@ -1,9 +1,9 @@
+import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 import { glob } from "tinyglobby";
 import {
 	DEFAULT_IGNORE_PATTERNS,
-	SYNTHETIC_VITE_CSS_CONFIG_NAME,
 	TAILWIND_V4_IMPORT_REGEX,
 	TAILWIND_VITE_PLUGIN_REGEX,
 	V3_CONFIG_PATHS,
@@ -12,11 +12,13 @@ import {
 	VITE_CONFIG_PATHS,
 } from "../constants";
 import type { TailwindConfig } from "../types";
-import { fileExists, readFileSync } from "./fs";
+import { fileExists } from "./fs";
 
 const require = createRequire(import.meta.url || __filename);
 const CONFIG_DISCOVERY_MAX_DEPTH = 8;
 const PROJECT_ROOT_MARKERS = ["package.json", ".git"];
+
+const VITE_CONFIG_NAME_REGEX = /^vite\.config\.[cm]?[jt]s$/;
 
 export const isCssConfigFile = (filePath: string) => filePath.endsWith(".css");
 
@@ -38,13 +40,6 @@ export function findProjectRoot(startDir: string) {
 		}
 		current = parent;
 	}
-}
-
-function syntheticViteCssConfigPath(viteConfigPath: string) {
-	return path.join(
-		path.dirname(viteConfigPath),
-		SYNTHETIC_VITE_CSS_CONFIG_NAME,
-	);
 }
 
 export async function loadTailwindConfig(
@@ -101,127 +96,224 @@ export async function loadTailwindConfig(
 	}
 }
 
-export async function findTailwindConfigPath(
+export type TailwindConfigKind = "css" | "js" | "vite";
+
+export interface TailwindConfigTarget {
+	kind: TailwindConfigKind;
+	path: string;
+	root: string;
+}
+
+export interface TailwindConfigDiscovery {
+	targets: TailwindConfigTarget[];
+	packageRoots: string[];
+}
+
+export function toConfigTarget(configPath: string): TailwindConfigTarget {
+	return {
+		kind: configKind(configPath),
+		path: configPath,
+		root: findProjectRoot(path.dirname(configPath)),
+	};
+}
+
+function configKind(configPath: string): TailwindConfigKind {
+	if (isCssConfigFile(configPath)) return "css";
+	return VITE_CONFIG_NAME_REGEX.test(path.basename(configPath)) ? "vite" : "js";
+}
+
+export async function findTailwindConfigs(
 	cwd: string,
-	configPath?: string,
-): Promise<string | null> {
-	if (configPath) {
-		const resolved = path.isAbsolute(configPath)
-			? configPath
-			: path.resolve(cwd, configPath);
-		return fileExists(resolved) ? resolved : null;
-	}
-
-	// Search for v4 CSS config files
-	const v4Paths = V4_CSS_FOLDERS.flatMap((folder) =>
-		V4_CSS_NAMES.map((name) => path.join(folder, name)),
-	);
-
-	for (const p of v4Paths) {
-		const fullPath = path.join(cwd, p);
-		if (fileExists(fullPath)) {
-			try {
-				const content = readFileSync(fullPath);
-				// Verify it's a valid Tailwind v4 CSS config
-				if (TAILWIND_V4_IMPORT_REGEX.test(content)) {
-					return fullPath;
-				}
-			} catch {
-				// File exists but can't be read (permission denied, etc.) - skip it
-				// This is expected behavior when scanning directories
-			}
-		}
-	}
-
-	// Search for v3 JavaScript config files
-	for (const p of V3_CONFIG_PATHS) {
-		const fullPath = path.join(cwd, p);
-		if (fileExists(fullPath)) {
-			return fullPath;
-		}
-	}
-
-	// Fallback: search recursively for CSS files that import tailwindcss
-	const cssCandidates = await glob("**/*.css", {
-		cwd,
-		absolute: true,
-		ignore: DEFAULT_IGNORE_PATTERNS,
-		deep: CONFIG_DISCOVERY_MAX_DEPTH,
-	});
-
-	const v4Matches: string[] = [];
-	for (const candidate of cssCandidates) {
-		try {
-			const content = readFileSync(candidate);
-			if (TAILWIND_V4_IMPORT_REGEX.test(content)) {
-				v4Matches.push(candidate);
-			}
-		} catch {
-			// Skip unreadable files during scan
-		}
-	}
-
-	if (v4Matches.length > 0) {
-		return sortCssCandidates(cwd, v4Matches)[0];
-	}
-
-	// Fallback: search for v3 config files recursively
-	const v3Recursive = await glob(
-		V3_CONFIG_PATHS.map((p) => `**/${p}`),
+): Promise<TailwindConfigDiscovery> {
+	const root = path.resolve(cwd);
+	const files = await glob(
+		[
+			"**/package.json",
+			"**/*.css",
+			...[...V3_CONFIG_PATHS, ...VITE_CONFIG_PATHS].map((p) => `**/${p}`),
+		],
 		{
-			cwd,
-			absolute: true,
-			ignore: DEFAULT_IGNORE_PATTERNS,
-			deep: CONFIG_DISCOVERY_MAX_DEPTH,
-		},
-	);
-	if (v3Recursive.length > 0) {
-		return sortByPathDepth(v3Recursive)[0];
-	}
-
-	const viteConfigPath = await findTailwindViteConfigPath(cwd);
-	if (viteConfigPath) {
-		return syntheticViteCssConfigPath(viteConfigPath);
-	}
-
-	return null;
-}
-
-async function findTailwindViteConfigPath(cwd: string) {
-	for (const p of VITE_CONFIG_PATHS) {
-		const fullPath = path.join(cwd, p);
-		if (isTailwindViteConfig(fullPath)) {
-			return fullPath;
-		}
-	}
-
-	const viteCandidates = await glob(
-		VITE_CONFIG_PATHS.map((p) => `**/${p}`),
-		{
-			cwd,
+			cwd: root,
 			absolute: true,
 			ignore: DEFAULT_IGNORE_PATTERNS,
 			deep: CONFIG_DISCOVERY_MAX_DEPTH,
 		},
 	);
 
-	const matches = viteCandidates.filter(isTailwindViteConfig);
-	if (matches.length === 0) {
-		return null;
+	const isPackageJson = (file: string) =>
+		path.basename(file) === "package.json";
+	const packageRoots = await findPackageRoots(
+		root,
+		files.filter(isPackageJson).map(path.dirname),
+	);
+
+	const deepestFirst = [...packageRoots].sort((a, b) => b.length - a.length);
+	const candidatesByRoot = new Map(
+		packageRoots.map((packageRoot) => [packageRoot, [] as string[]]),
+	);
+	for (const file of files) {
+		if (isPackageJson(file)) continue;
+		const owner = deepestFirst.find((packageRoot) =>
+			isInsideDir(packageRoot, file),
+		);
+		if (owner) candidatesByRoot.get(owner)?.push(file);
 	}
 
-	return sortByPathDepth(matches)[0];
+	const targets = await Promise.all(
+		[...candidatesByRoot].map(([packageRoot, candidates]) =>
+			pickConfig(packageRoot, candidates),
+		),
+	);
+
+	return {
+		targets: targets.filter((target) => target !== undefined),
+		packageRoots,
+	};
 }
 
-function isTailwindViteConfig(filePath: string) {
-	if (!fileExists(filePath)) {
-		return false;
+async function findPackageRoots(root: string, packageDirs: string[]) {
+	const workspaces = await readWorkspacePatterns(root);
+	if (!workspaces) {
+		return [...new Set([root, ...packageDirs])];
 	}
 
+	const toPackageJson = (pattern: string) =>
+		`${pattern.replace(/\/+$/, "")}/package.json`;
+	const workspacePackageJsons = await glob(
+		workspaces.filter((p) => !p.startsWith("!")).map(toPackageJson),
+		{
+			cwd: root,
+			absolute: true,
+			ignore: [
+				...DEFAULT_IGNORE_PATTERNS,
+				...workspaces
+					.filter((p) => p.startsWith("!"))
+					.map((p) => toPackageJson(p.slice(1))),
+			],
+		},
+	);
+
+	return [...new Set([root, ...workspacePackageJsons.map(path.dirname)])];
+}
+
+async function readWorkspacePatterns(root: string) {
+	const [packageJson, pnpmWorkspace] = await Promise.all([
+		readText(path.join(root, "package.json")),
+		readText(path.join(root, "pnpm-workspace.yaml")),
+	]);
+
+	const patterns = [
+		...parsePackageJsonWorkspaces(packageJson),
+		...parsePnpmWorkspacePackages(pnpmWorkspace),
+	];
+	return patterns.length > 0 ? patterns : undefined;
+}
+
+function parsePackageJsonWorkspaces(content: string): string[] {
 	try {
-		return TAILWIND_VITE_PLUGIN_REGEX.test(readFileSync(filePath));
+		const { workspaces } = JSON.parse(content) as {
+			workspaces?: string[] | { packages?: string[] };
+		};
+		const patterns = Array.isArray(workspaces)
+			? workspaces
+			: workspaces?.packages;
+		return (patterns ?? []).filter((p) => typeof p === "string");
 	} catch {
-		return false;
+		return [];
+	}
+}
+
+function parsePnpmWorkspacePackages(content: string) {
+	const patterns: string[] = [];
+	let inPackages = false;
+
+	for (const line of content.split(/\r?\n/)) {
+		if (/^packages\s*:/.test(line)) {
+			inPackages = true;
+		} else if (/^[^\s#]/.test(line)) {
+			inPackages = false;
+		} else if (inPackages) {
+			const item = line.match(/^\s*-\s*["']?([^"'#\s]+)["']?/);
+			if (item) patterns.push(item[1]);
+		}
+	}
+
+	return patterns;
+}
+
+export function nestedRootIgnores(root: string, roots: string[]) {
+	return roots
+		.filter((other) => other !== root && isInsideDir(root, other))
+		.map((other) => `${path.relative(root, other)}/**`);
+}
+
+export function isInsideDir(dir: string, filePath: string) {
+	const relative = path.relative(dir, filePath);
+	return !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+async function pickConfig(
+	root: string,
+	candidates: string[],
+): Promise<TailwindConfigTarget | undefined> {
+	const target = (kind: TailwindConfigKind, configPath: string) => ({
+		kind,
+		path: configPath,
+		root,
+	});
+	const candidateSet = new Set(candidates);
+	const existing = (paths: string[]) =>
+		paths.map((p) => path.join(root, p)).filter((p) => candidateSet.has(p));
+	const byName = (names: string[]) =>
+		candidates.filter((c) => names.includes(path.basename(c)));
+
+	const preferredCss = existing(
+		V4_CSS_FOLDERS.flatMap((folder) =>
+			V4_CSS_NAMES.map((name) => path.join(folder, name)),
+		),
+	);
+	const preferredCssMatch = await findFirstMatch(
+		preferredCss,
+		TAILWIND_V4_IMPORT_REGEX,
+	);
+	if (preferredCssMatch) return target("css", preferredCssMatch);
+
+	const rootV3 = existing(V3_CONFIG_PATHS)[0];
+	if (rootV3) return target("js", rootV3);
+
+	const otherCss = sortCssCandidates(
+		root,
+		candidates.filter((c) => isCssConfigFile(c) && !preferredCss.includes(c)),
+	);
+	const cssMatch = await findFirstMatch(otherCss, TAILWIND_V4_IMPORT_REGEX);
+	if (cssMatch) return target("css", cssMatch);
+
+	const nestedV3 = sortByPathDepth(byName(V3_CONFIG_PATHS))[0];
+	if (nestedV3) return target("js", nestedV3);
+
+	const viteConfigs = [
+		...existing(VITE_CONFIG_PATHS),
+		...sortByPathDepth(byName(VITE_CONFIG_PATHS)),
+	];
+	const viteMatch = await findFirstMatch(
+		[...new Set(viteConfigs)],
+		TAILWIND_VITE_PLUGIN_REGEX,
+	);
+	if (viteMatch) return target("vite", viteMatch);
+
+	return undefined;
+}
+
+async function findFirstMatch(paths: string[], regex: RegExp) {
+	const contents = await Promise.all(paths.map(readText));
+	return paths.find((_, index) => regex.test(contents[index]));
+}
+
+async function readText(filePath: string) {
+	try {
+		return await readFile(filePath, "utf-8");
+	} catch {
+		return "";
 	}
 }
 

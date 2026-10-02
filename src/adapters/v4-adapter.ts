@@ -6,18 +6,50 @@ import postcss from "postcss";
 import { SYNTHETIC_VITE_CSS_CONFIG_CONTENT } from "../constants";
 import type { DesignSystem } from "../types";
 import { AdapterLoadError } from "../types";
+import type { TailwindConfigTarget } from "../utils/config";
 import { fileExists, readFileSync } from "../utils/fs";
 
 const require = createRequire(import.meta.url || __filename);
 
+function fromPostcss(nodes: postcss.ChildNode[]): unknown[] {
+	return nodes.map((node) => {
+		switch (node.type) {
+			case "rule":
+				return {
+					kind: "rule",
+					selector: node.selector,
+					nodes: fromPostcss(node.nodes),
+				};
+			case "atrule":
+				return {
+					kind: "at-rule",
+					name: node.name,
+					params: node.params,
+					nodes: node.nodes ? fromPostcss(node.nodes) : null,
+				};
+			case "decl":
+				return {
+					kind: "declaration",
+					property: node.prop,
+					value: node.value,
+					important: node.important,
+				};
+			default:
+				return { kind: "comment", value: node.text };
+		}
+	});
+}
+
 export async function loadV4DesignSystem(
 	state: State,
-	cwd: string,
-	configPath: string,
+	resolvePaths: string[],
+	target: TailwindConfigTarget,
 	verbose = false,
 ): Promise<void> {
 	try {
-		const tailwindPath = require.resolve("tailwindcss", { paths: [cwd] });
+		const tailwindPath = require.resolve("tailwindcss", {
+			paths: resolvePaths,
+		});
 		const tailwindcss = require(tailwindPath) as unknown;
 
 		if (
@@ -27,14 +59,10 @@ export async function loadV4DesignSystem(
 			"__unstable__loadDesignSystem" in tailwindcss &&
 			typeof tailwindcss.__unstable__loadDesignSystem === "function"
 		) {
-			let cssContent: string;
-			const basePath = path.dirname(configPath);
-
-			if (fileExists(configPath)) {
-				cssContent = readFileSync(configPath);
-			} else {
-				cssContent = SYNTHETIC_VITE_CSS_CONFIG_CONTENT;
-			}
+			const cssContent =
+				target.kind === "vite"
+					? SYNTHETIC_VITE_CSS_CONFIG_CONTENT
+					: readFileSync(target.path);
 
 			type LoadDesignSystemFn = (
 				css: string,
@@ -57,14 +85,16 @@ export async function loadV4DesignSystem(
 				tailwindcss.__unstable__loadDesignSystem as LoadDesignSystemFn;
 
 			const designSystem = await loadDesignSystem(cssContent, {
-				base: basePath,
+				base: path.dirname(target.path),
 				async loadModule(
 					id: string,
 					base: string,
 					_type: "config" | "plugin",
 				): Promise<{ base: string; module: unknown }> {
 					try {
-						const modulePath = require.resolve(id, { paths: [base, cwd] });
+						const modulePath = require.resolve(id, {
+							paths: [base, ...resolvePaths],
+						});
 						const module = require(modulePath);
 						return {
 							base: path.dirname(modulePath),
@@ -88,7 +118,7 @@ export async function loadV4DesignSystem(
 					if (!_id.startsWith(".") && !_id.startsWith("/")) {
 						try {
 							const pkgJsonPath = require.resolve(`${_id}/package.json`, {
-								paths: [base, cwd],
+								paths: [base, ...resolvePaths],
 							});
 							const pkgDir = path.dirname(pkgJsonPath);
 							const cssPath = path.join(pkgDir, "index.css");
@@ -117,23 +147,23 @@ export async function loadV4DesignSystem(
 
 			Object.assign(designSystem, {
 				dependencies: () => new Set<string>(),
+				compile(classes: string[]): unknown[][] {
+					if (designSystem.candidatesToAst) {
+						return designSystem.candidatesToAst(classes);
+					}
 
-				compile(classes: string[]): unknown[] {
 					if (designSystem.candidatesToCss) {
-						const results = designSystem.candidatesToCss(classes);
-						return results.map((result: unknown) => {
-							if (typeof result === "string" && result.length > 0) {
-								try {
-									return postcss.parse(result);
-								} catch {
-									return postcss.root();
-								}
+						return designSystem.candidatesToCss(classes).map((css) => {
+							if (!css) return [];
+							try {
+								return fromPostcss(postcss.parse(css).nodes);
+							} catch {
+								return [];
 							}
-							return postcss.root();
 						});
 					}
 
-					return classes.map(() => postcss.root());
+					return classes.map(() => []);
 				},
 			});
 

@@ -31,22 +31,15 @@ interface CliOptions {
 }
 
 function resolveOptions(files: string[], options: CliOptions) {
-	const hasConfigFlag = !!options.config;
 	const hasAutoFlag = !!options.auto;
 	const hasFiles = files.length > 0;
 
 	let cwd = process.cwd();
-	let configPath = options.config;
+	const configPath = options.config && path.resolve(options.config);
 	let patterns = files;
 	let autoDiscover = hasAutoFlag;
 
-	if (hasConfigFlag && options.config) {
-		configPath = path.isAbsolute(options.config)
-			? options.config
-			: path.resolve(process.cwd(), options.config);
-	}
-
-	if (hasConfigFlag && options.config && !hasFiles) {
+	if (configPath && !hasFiles) {
 		const configDir = path.dirname(configPath);
 		cwd = isCssConfigFile(configPath) ? findProjectRoot(configDir) : configDir;
 		patterns = [];
