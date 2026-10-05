@@ -60,7 +60,15 @@ tailwind-lint --verbose
 **Tailwind CSS v3:**
 
 - Finds JavaScript config files: `tailwind.config.js`, `tailwind.config.cjs`, `tailwind.config.mjs`, `tailwind.config.ts`
-- Uses file patterns from the `content` array in your config
+- Uses file patterns from the `content` array in your config, resolved from the package root (or from the config file with `content.relative: true`)
+
+**Monorepos:**
+
+- Workspace packages from `package.json` `workspaces` or `pnpm-workspace.yaml` are detected; without a workspace definition every directory with a `package.json` is treated as a package
+- Each package gets its own config detected; packages without one fall back to the closest parent config
+- Each file is linted with the config of the closest package that contains it, so apps with different themes or Tailwind versions (v3 and v4 side by side) are linted correctly
+- `tailwindcss` is resolved from the config's package first, falling back to the working directory
+- Use `--verbose` to see which config each package uses
 
 ### Options
 

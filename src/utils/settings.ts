@@ -5,7 +5,14 @@ import type {
 } from "@tailwindcss/language-service";
 import { fileExists, readFileSync } from "./fs";
 
-type TailwindSettingsPatch = Partial<TailwindCssSettings>;
+type TailwindSettingsPatch = {
+	includeLanguages?: TailwindCssSettings["includeLanguages"];
+	classAttributes?: TailwindCssSettings["classAttributes"];
+	classFunctions?: TailwindCssSettings["classFunctions"];
+	experimental?: Partial<TailwindCssSettings["experimental"]>;
+	files?: Partial<TailwindCssSettings["files"]>;
+	lint?: Partial<TailwindCssSettings["lint"]>;
+};
 
 export function loadWorkspaceTailwindSettings(
 	cwd: string,
@@ -29,7 +36,7 @@ function readVsCodeTailwindSettings(cwd: string): TailwindSettingsPatch {
 	const lint = readNestedObject(raw, "tailwindCSS.lint");
 
 	return {
-		includeLanguages: asRecord(raw["tailwindCSS.includeLanguages"]),
+		includeLanguages: asStringRecord(raw["tailwindCSS.includeLanguages"]),
 		classAttributes: asStringArray(raw["tailwindCSS.classAttributes"]),
 		classFunctions: asStringArray(raw["tailwindCSS.classFunctions"]),
 		experimental: {
@@ -62,7 +69,7 @@ function readZedTailwindSettings(cwd: string): TailwindSettingsPatch {
 	}
 
 	return {
-		includeLanguages: asRecord(normalized.includeLanguages),
+		includeLanguages: asStringRecord(normalized.includeLanguages),
 		classAttributes: asStringArray(normalized.classAttributes),
 		classFunctions: asStringArray(normalized.classFunctions),
 		experimental: {
@@ -106,6 +113,19 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 	return value && typeof value === "object" && !Array.isArray(value)
 		? (value as Record<string, unknown>)
 		: null;
+}
+
+function asStringRecord(value: unknown): Record<string, string> | undefined {
+	const record = asRecord(value);
+	if (!record) {
+		return undefined;
+	}
+
+	return Object.fromEntries(
+		Object.entries(record).filter(
+			(entry): entry is [string, string] => typeof entry[1] === "string",
+		),
+	);
 }
 
 function asStringArray(value: unknown): string[] | undefined {

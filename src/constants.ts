@@ -62,8 +62,6 @@ export const VITE_CONFIG_PATHS = [
 	"vite.config.cts",
 ];
 
-export const SYNTHETIC_VITE_CSS_CONFIG_NAME = ".tailwind-lint.vite.css";
-
 export const SYNTHETIC_VITE_CSS_CONFIG_CONTENT = '@import "tailwindcss";';
 
 export const LANGUAGE_MAP: Record<string, string> = {

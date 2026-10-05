@@ -1,7 +1,7 @@
 import type { Diagnostic } from "vscode-languageserver";
 
 export interface TailwindConfig {
-	content?: string[] | { files?: string[] };
+	content?: string[] | { files?: string[]; relative?: boolean };
 	separator?: string;
 	[key: string]: unknown;
 }
@@ -13,15 +13,6 @@ export interface ResolvedTailwindConfig extends TailwindConfig {
 export interface DesignSystem {
 	candidatesToAst?: (candidates: string[]) => unknown[][];
 	candidatesToCss?: (candidates: string[]) => (string | null)[];
-	[key: string]: unknown;
-}
-
-export interface ContextUtils {
-	[key: string]: unknown;
-}
-
-export interface GenerateRulesModule {
-	generateRules?: (set: unknown, context: unknown) => unknown[];
 	[key: string]: unknown;
 }
 

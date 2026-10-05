@@ -15,7 +15,7 @@ function isDirectory(filePath: string) {
 	}
 }
 
-export function createEditorState(cwd: string) {
+export function createEditorState(cwd: string): EditorState {
 	const defaultSettings: Settings = {
 		editor: {
 			tabSize: DEFAULT_TAB_SIZE,
