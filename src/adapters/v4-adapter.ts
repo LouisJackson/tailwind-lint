@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import type { State } from "@tailwindcss/language-service";
 import ansis from "ansis";
 import postcss from "postcss";
@@ -10,6 +11,34 @@ import type { TailwindConfigTarget } from "../utils/config";
 import { fileExists, readFileSync } from "../utils/fs";
 
 const require = createRequire(import.meta.url || __filename);
+
+function resolveModule(id: string, paths: string[]): string {
+	let firstError: unknown;
+	for (const dir of paths) {
+		try {
+			// createRequire per directory honors package "exports" subpaths
+			return createRequire(path.join(dir, "noop.js")).resolve(id);
+		} catch (error) {
+			firstError ??= error;
+		}
+	}
+	throw firstError ?? new Error(`Cannot find module "${id}"`);
+}
+
+// ESM-only plugins come back from require() as a module namespace instead
+// of the plugin itself, so import and unwrap the default export.
+async function importModule(modulePath: string): Promise<unknown> {
+	let mod: unknown;
+	try {
+		mod = await import(pathToFileURL(modulePath).href);
+	} catch {
+		mod = require(modulePath);
+	}
+	if (mod !== null && typeof mod === "object" && "default" in mod) {
+		return mod.default;
+	}
+	return mod;
+}
 
 function fromPostcss(nodes: postcss.ChildNode[]): unknown[] {
 	return nodes.map((node) => {
@@ -92,13 +121,10 @@ export async function loadV4DesignSystem(
 					_type: "config" | "plugin",
 				): Promise<{ base: string; module: unknown }> {
 					try {
-						const modulePath = require.resolve(id, {
-							paths: [base, ...resolvePaths],
-						});
-						const module = require(modulePath);
+						const modulePath = resolveModule(id, [base, ...resolvePaths]);
 						return {
 							base: path.dirname(modulePath),
-							module,
+							module: await importModule(modulePath),
 						};
 					} catch (error) {
 						throw new Error(
