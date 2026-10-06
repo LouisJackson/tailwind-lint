@@ -109,16 +109,7 @@ export async function createState(
 		modules: undefined,
 		blocklist: [],
 		editor: createEditorState(cwd),
-		features:
-			isV4 || isCssConfig
-				? [
-						"css-at-theme",
-						"layer:base",
-						"content-list",
-						"source-inline",
-						"source-not",
-					]
-				: ["layer:base", "content-list", "jit", "separator:root"],
+		features: ["diagnostics"] as unknown as State["features"],
 	};
 
 	if (isV4 || isCssConfig) {

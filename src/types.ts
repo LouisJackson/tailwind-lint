@@ -12,7 +12,7 @@ export interface ResolvedTailwindConfig extends TailwindConfig {
 
 export interface DesignSystem {
 	candidatesToAst?: (candidates: string[]) => unknown[][];
-	candidatesToCss?: (candidates: string[]) => (string | null)[];
+	candidatesToCss?: (candidates: string[]) => string[];
 	[key: string]: unknown;
 }
 

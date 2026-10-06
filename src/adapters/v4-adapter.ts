@@ -173,7 +173,6 @@ export async function loadV4DesignSystem(
 
 			Object.assign(designSystem, {
 				dependencies: () => new Set<string>(),
-				// language-service 0.16+ walks a Tailwind AST (`node.kind`), not PostCSS roots.
 				compile(classes: string[]): unknown[][] {
 					if (designSystem.candidatesToAst) {
 						return designSystem.candidatesToAst(classes);
